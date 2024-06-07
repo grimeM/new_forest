@@ -1,0 +1,136 @@
+#include <vector>
+#include <iostream>
+#include <cmath>
+#include <functional>
+
+using namespace std;
+
+// System state equation
+void systemEquations(const vector<double>& state, vector<double>& dState_dt, const vector<double>& control, double t) {
+    // Example system equations
+    double B = state[0]; // Biomass
+    double r = state[1]; // Growth rate
+    double I = state[2]; // Burned area
+
+    double F = control[0]; // Felling
+    double T = control[1]; // Thinning
+    double R = control[2]; // Reforestation
+    double S = control[3]; // Fire prevention
+
+    // Example dynamics (these need to be derived from the actual problem)
+    dState_dt[0] = r * B - 0.01 * I - F; // dB/dt
+    dState_dt[1] = 0.1 - r * 0.05 + T;   // dr/dt
+    dState_dt[2] = I * 0.1 - S;          // dI/dt
+}
+
+// Objective function (to integrate)
+double objectiveFunction(const vector<double>& state, const vector<double>& control, double t) {
+    // Example objective
+    return -state[0] * control[0]; // Maximize biomass cut down (negative cost)
+}
+
+// Hamiltonian function
+double hamiltonian(const vector<double>& state, const vector<double>& control, const vector<double>& lambda, double t) {
+    return objectiveFunction(state, control, t) + lambda[0] * (state[1] * state[0] - 0.01 * state[2] - control[0]) +
+           lambda[1] * (0.1 - state[1] * 0.05 + control[1]) +
+           lambda[2] * (state[2] * 0.1 - control[3]);
+}
+
+// Gradient of the Hamiltonian with respect to controls
+void gradientHamiltonian(const vector<double>& state, const vector<double>& lambda, vector<double>& gradH, double t) {
+    // gradH calculation would depend on the partial derivatives of H wrt control variables
+    gradH[0] = -state[0] - lambda[0];  // Example partial derivative wrt F
+    gradH[1] = lambda[1];             // Example partial derivative wrt T
+    gradH[2] = 0;                     // Assuming no direct dependence of H on R in this example
+    gradH[3] = -lambda[2];            // Example partial derivative wrt S
+}
+
+// Forward simulation to estimate the state over time
+void forwardSweep(vector<double>& state, const vector<vector<double>>& control, double dt, int steps) {
+    for (int i = 0; i < steps; ++i) {
+        vector<double> dState_dt(3, 0.0);
+        systemEquations(state, dState_dt, control[i], i * dt);
+        for (int j = 0; j < state.size(); ++j) {
+            state[j] += dState_dt[j] * dt;  // Euler method for integration
+        }
+    }
+}
+
+// Backward simulation for adjoint variables
+void backwardSweep(vector<double>& lambda, const vector<vector<double>>& state, const vector<vector<double>>& control, double dt, int steps) {
+    vector<double> lambdaNext(3, 0.0);  // Transversality condition at final time
+    for (int i = steps - 1; i >= 0; --i) {
+        // Calculate gradient of Hamiltonian at this step
+        vector<double> gradH(4, 0.0);
+        gradientHamiltonian(state[i], lambda, gradH, i * dt);
+
+        // Update lambda using backward Euler method
+        for (int j = 0; j < lambda.size(); ++j) {
+            lambda[j] = lambdaNext[j] - gradH[j] * dt;  // Example update, assumes dLambda/dt = -gradH
+        }
+        lambdaNext = lambda; // store current lambda for next iteration
+    }
+}
+
+// Update control variables based on the gradient of the Hamiltonian
+void updateControl(vector<vector<double>>& control, const vector<double>& gradH, double stepSize, int steps) {
+    for (int i = 0; i < steps; ++i) {
+        for (int j = 0; j < control[i].size(); ++j) {
+            control[i][j] -= stepSize * gradH[j]; // Simple gradient descent step
+        }
+    }
+}
+
+int main() {
+    int steps = 100; // Number of time steps
+    double dt = 0.1; // Time step size
+    vector<double> state = {7.5, 0.075, 0.07}; // Initial conditions for B, r, I
+    vector<vector<double>> control(steps, vector<double>(4, 0.1)); // Initial guess for controls F, T, R, S
+    vector<double> lambda(3, 0.0); // Initial conditions for adjoint variables
+
+    bool converged = false;
+    int maxIterations = 100;
+    int iteration = 0;
+
+    while (!converged && iteration < maxIterations) {
+        vector<vector<double>> oldControl = control;
+        
+        // Forward sweep: simulate state evolution
+        forwardSweep(state, control, dt, steps);
+        
+        // Backward sweep: simulate adjoint evolution
+        backwardSweep(lambda, state, control, dt, steps);
+        
+        // Update control variables
+        vector<double> gradH(4, 0.0);
+        gradientHamiltonian(state[steps-1], lambda, gradH, steps * dt);
+        updateControl(control, gradH, 0.01, steps); // Example step size for control update
+        
+        // Check convergence (simple norm check)
+        double norm = 0.0;
+        for (int i = 0; i < steps; ++i) {
+            for (int j = 0; j < control[i].size(); ++j) {
+                double diff = control[i][j] - oldControl[i][j];
+                norm += diff * diff;
+            }
+        }
+        norm = sqrt(norm);
+
+        if (norm < 1e-4) { // Convergence threshold
+            converged = true;
+        }
+        iteration++;
+    }
+
+    // Output the results
+    cout << "Converged in " << iteration << " iterations." << endl;
+    for (int i = 0; i < steps; ++i) {
+        cout << "Control at step " << i << ": ";
+        for (int j = 0; j < control[i].size(); ++j) {
+            cout << control[i][j] << " ";
+        }
+        cout << endl;
+    }
+
+    return 0;
+}
